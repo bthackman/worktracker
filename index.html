@@ -263,6 +263,8 @@
     <div class="stat"><div class="n" id="statWatch" style="color:var(--muted)">—</div><div class="l">watch only</div></div>
     <div class="stat"><div class="n" id="statOverdue">0</div><div class="l">overdue (yours)</div></div>
     <div class="stat"><div class="n" style="color:var(--teal)" id="statSprintEnd">—</div><div class="l" id="statSprintEndLabel">due soon</div></div>
+    <div class="stat"><div class="n" style="color:var(--terracotta)" id="statOldestBlocking">—</div><div class="l">oldest blocking (days)</div></div>
+    <div class="stat"><div class="n" style="color:var(--teal)" id="statClosedWeek">—</div><div class="l">closed this week</div></div>
   </div>
 
   <div class="today-focus" id="todayFocus">
@@ -321,7 +323,8 @@
   <footer>
     This page reads from data.json each session — update that file each check-in, this HTML shell never changes.<br>
     Badges: <span class="badge p">P</span> blocking · <span class="badge u">U</span> unverified · <span class="badge w">W</span> watch-only · <span class="badge n">N</span> new since last check-in · <span class="badge c">C</span> completed today.<br>
-    <strong>To update items:</strong> edit data.json only — items, details, voice, completed, programs. The HTML shell (this file) never needs to change.
+    <strong>To update items:</strong> edit data.json only — items, details, voice, completed, programs. The HTML shell (this file) never needs to change.<br>
+    <a href="#" onclick="lockNow();return false;" style="color:var(--muted);">Lock this session</a>
   </footer>
 
 </div>
@@ -591,6 +594,8 @@ function recalcCounts(){
   if(sprintEndEl&&window.SPRINT_END_DATE){var sprintDate=new Date(window.SPRINT_END_DATE+'T23:59:59');var sprintCount=0;document.querySelectorAll('#programView .item').forEach(function(it){if(isDone(it))return;var due=it.getAttribute('data-due');if(due&&new Date(due+'T23:59:59')<=sprintDate)sprintCount++;});sprintEndEl.textContent=sprintCount;}
   var overdueEl=document.getElementById('statOverdue');
   if(overdueEl){var now=Date.now();var overdueCount=0;document.querySelectorAll('#programView .item').forEach(function(it){if(isDone(it))return;var due=it.getAttribute('data-due');if(due&&it.getAttribute('data-court')==='You'&&new Date(due+'T23:59:59').getTime()<now)overdueCount++;});overdueEl.textContent=overdueCount;}
+  var oldestBlockEl=document.getElementById('statOldestBlocking');
+  if(oldestBlockEl){var oldestTs=null;document.querySelectorAll('#programView .item.blocking').forEach(function(it){if(isDone(it))return;var raised=it.getAttribute('data-date');if(!raised)return;var ts=new Date(raised+'T00:00:00').getTime();if(oldestTs===null||ts<oldestTs)oldestTs=ts;});oldestBlockEl.textContent=oldestTs===null?'—':Math.max(0,Math.floor((Date.now()-oldestTs)/86400000));}
 }
 
 function computePriority(item){var explicit=item.getAttribute('data-pri');if(explicit)return explicit;if(item.classList.contains('blocking'))return'high';var due=item.getAttribute('data-due');if(due){var days=Math.ceil((new Date(due+'T00:00:00').getTime()-Date.now())/86400000);if(days<=3)return'high';if(days<=10)return'med';}if(item.classList.contains('watch'))return'low';return'med';}
@@ -676,7 +681,7 @@ function toggleCollapseAll(){var collapse=document.getElementById('collapseAllTo
 function setStatus(msg){document.getElementById('capStatus').textContent=msg;}
 function localQueueKey(){return'wt-capture-queue';}
 function queueLocally(payload){try{var q=JSON.parse(localStorage.getItem(localQueueKey())||'[]');q.push(payload);localStorage.setItem(localQueueKey(),JSON.stringify(q));}catch(e){}}
-function flushLocalQueue(){if(!API_URL||API_URL.indexOf('PASTE_')===0)return;try{var q=JSON.parse(localStorage.getItem(localQueueKey())||'[]');if(!q.length)return;var remaining=[];q.forEach(function(payload){sendToSheet(payload,function(ok){if(!ok)remaining.push(payload);});});localStorage.setItem(localQueueKey(),JSON.stringify(remaining));}catch(e){}}
+function flushLocalQueue(){if(!API_URL||API_URL.indexOf('PASTE_')===0)return;try{var q=JSON.parse(localStorage.getItem(localQueueKey())||'[]');if(!q.length)return;var remaining=[];var pending=q.length;q.forEach(function(payload){sendToSheet(payload,function(ok){if(!ok)remaining.push(payload);pending--;if(pending===0){try{localStorage.setItem(localQueueKey(),JSON.stringify(remaining));}catch(e){}}});});}catch(e){}}
 function sendToSheet(payload,cb){fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(){if(cb)cb(true);}).catch(function(){if(cb)cb(false);});}
 function logComplete(payload){if(!API_URL||API_URL.indexOf('PASTE_')===0){queueLocally(payload);return;}sendToSheet(payload,function(ok){if(!ok)queueLocally(payload);});}
 function findItemsForPkg(programName,pkgName){return ITEMS.filter(function(it){return it.program===programName&&(!pkgName||it.pkg===pkgName);});}
@@ -704,6 +709,7 @@ function addCapture(){
   if(!API_URL||API_URL.indexOf('PASTE_')===0){queueLocally(payload);setStatus('Saved locally — Apps Script URL not configured yet.');return;}
   sendToSheet(payload,function(ok){if(ok)setStatus('Saved to your tracker sheet — tell Claude to sync next session.');else{queueLocally(payload);setStatus('Could not reach the sheet — saved locally, will retry.');}});
 }
+function lockNow(){try{sessionStorage.removeItem(GATE_PASS_KEY);}catch(e){}location.reload();}
 function typeLabel(type){return type==='note'?'Note':type==='complete'?'Done':type==='blocker'?'Blocker':type==='watch'?'Watch':type==='subtask'?'Subtask':'New';}
 function formatTs(ts){if(!ts)return'';var d=new Date(ts);if(isNaN(d.getTime()))return'';return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});}
 
@@ -752,7 +758,17 @@ function renderSessionData(d){
     var pl=document.getElementById('pageLede');if(pl&&d.meta.lede)pl.textContent=d.meta.lede;
     var tt=document.getElementById('todayTag');if(tt&&d.meta.sessionDate)tt.textContent='Today — '+d.meta.sessionDate;
     if(d.meta.sprintEnd){window.SPRINT_END_DATE=d.meta.sprintEnd;var sc=document.getElementById('sprintChip');if(sc&&d.meta.sprintEndLabel)sc.textContent='Before '+d.meta.sprintEndLabel;var ssl=document.getElementById('statSprintEndLabel');if(ssl&&d.meta.sprintEndLabel)ssl.textContent='due by '+d.meta.sprintEndLabel;}
-    if(d.meta.generated){var ft=document.querySelector('footer');if(ft){var gEl=document.createElement('div');gEl.style.cssText='margin-top:6px;color:var(--faint);font-size:11.5px;';gEl.textContent='Data generated '+d.meta.generated;ft.appendChild(gEl);}}
+    if(d.meta.generated){
+      var ft=document.querySelector('footer');
+      if(ft){
+        var ageDays=Math.floor((Date.now()-new Date(d.meta.generated+'T00:00:00').getTime())/86400000);
+        var ageText=ageDays<=0?'today':ageDays===1?'1 day ago':ageDays+' days ago';
+        var gEl=document.createElement('div');
+        gEl.style.cssText='margin-top:6px;font-size:11.5px;color:'+(ageDays>=7?'var(--terracotta)':'var(--faint)')+';';
+        gEl.textContent='Data generated '+d.meta.generated+' ('+ageText+')'+(ageDays>=7?' — this is getting stale, time for a check-in':'');
+        ft.appendChild(gEl);
+      }
+    }
   }
   if(d.voice&&d.voice.length){
     var vb=document.getElementById('voiceBox');
@@ -761,6 +777,8 @@ function renderSessionData(d){
   renderCompleted(d);
 }
 function renderCompleted(d){
+  var closedWeekEl=document.getElementById('statClosedWeek');
+  if(closedWeekEl){var closedCount=0;(d.completedThisWeek||[]).forEach(function(grp){closedCount+=(grp.items||[]).length;});closedWeekEl.textContent=closedCount;}
   var cs=document.getElementById('completedSection');if(!cs)return;cs.innerHTML='';
   var hasThisWeek=d.completedThisWeek&&d.completedThisWeek.length;var hasLastWeek=d.completedLastWeek&&d.completedLastWeek.length;
   if(!hasThisWeek&&!hasLastWeek)return;
@@ -803,7 +821,7 @@ function showGate(enc){
   function attempt(){
     var p=inp.value;if(!p)return;btn.disabled=true;btn.textContent='…';err.textContent='';
     decryptPayload(p,enc).then(function(d){
-      try{localStorage.setItem(GATE_PASS_KEY,p);}catch(e){}
+      try{sessionStorage.setItem(GATE_PASS_KEY,p);}catch(e){}
       ov.remove();boot(d);
     }).catch(function(){
       btn.disabled=false;btn.textContent='Unlock';err.textContent='Wrong password — try again.';
@@ -847,7 +865,7 @@ document.addEventListener('DOMContentLoaded',function(){
   fetch('data.enc.json?v='+Date.now())
     .then(function(r){if(!r.ok)throw 0;return r.json();})
     .then(function(enc){
-      var cached=null;try{cached=localStorage.getItem(GATE_PASS_KEY);}catch(e){}
+      var cached=null;try{cached=sessionStorage.getItem(GATE_PASS_KEY);}catch(e){}
       if(cached){decryptPayload(cached,enc).then(function(d){boot(d);}).catch(function(){showGate(enc);});}
       else showGate(enc);
     })
